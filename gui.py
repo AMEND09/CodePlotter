@@ -1,6 +1,16 @@
-# --- START OF FILE gui.py ---
+"""
+GCode Visualizer & Manipulator - A tool for visualizing, transforming, and merging G-code files
 
-# --- START OF FILE gui.py ---
+This application provides a graphical interface for:
+- Loading and viewing multiple G-code files
+- Transforming G-code with scale, rotation, and translation
+- Warping bed images to match real-world coordinates
+- Merging multiple G-code files with individual transformations
+- Visualizing G-code paths with accurate bed representation
+- Supporting pen plotters with pen offset adjustments
+
+Created by Aditya Mendiratta
+"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
@@ -166,6 +176,9 @@ def apply_transformations_to_coords(original_coords_segments, transform_params):
     x_offset = transform_params['x_offset']
     y_offset = transform_params['y_offset']
     
+    # Get rotation angle in radians if it exists, otherwise default to 0
+    rotation_angle = math.radians(transform_params.get('rotation_angle', 0))
+    
     # Do NOT apply pen offsets for preview display
     # pen_x_offset = transform_params['pen_x_offset']
     # pen_y_offset = transform_params['pen_y_offset']
@@ -173,13 +186,23 @@ def apply_transformations_to_coords(original_coords_segments, transform_params):
     for segment in original_coords_segments:
         new_segment = []
         for point in segment:
-            # Apply scale and primary offset (to original relative coords)
-            transformed_x = (point['x'] * x_scale) + x_offset
-            transformed_y = (point['y'] * y_scale) + y_offset
+            # Apply scale to original relative coords
+            scaled_x = point['x'] * x_scale
+            scaled_y = point['y'] * y_scale
             
-            # No longer apply pen offset for visual preview
-            # final_x = transformed_x + pen_x_offset
-            # final_y = transformed_y + pen_y_offset
+            # Apply rotation if needed (rotate around origin before translation)
+            if rotation_angle != 0:
+                # Rotation formula: x' = x*cos(θ) - y*sin(θ), y' = x*sin(θ) + y*cos(θ)
+                cos_theta = math.cos(rotation_angle)
+                sin_theta = math.sin(rotation_angle)
+                rotated_x = scaled_x * cos_theta - scaled_y * sin_theta
+                rotated_y = scaled_x * sin_theta + scaled_y * cos_theta
+                transformed_x = rotated_x + x_offset
+                transformed_y = rotated_y + y_offset
+            else:
+                # No rotation, just apply offset
+                transformed_x = scaled_x + x_offset
+                transformed_y = scaled_y + y_offset
             
             # Copy other info
             new_segment.append({**point, 'x': transformed_x, 'y': transformed_y})
@@ -200,6 +223,11 @@ def generate_transformed_gcode(original_gcode_lines, transform_params):
     z_offset = transform_params['z_offset']
     pen_x_offset = transform_params['pen_x_offset']
     pen_y_offset = transform_params['pen_y_offset']
+    
+    # Get rotation angle in radians if it exists, otherwise default to 0
+    rotation_angle = math.radians(transform_params.get('rotation_angle', 0))
+    cos_theta = math.cos(rotation_angle)
+    sin_theta = math.sin(rotation_angle)
 
     for line in original_gcode_lines:
         modified_line = line
@@ -211,30 +239,59 @@ def generate_transformed_gcode(original_gcode_lines, transform_params):
         is_motion_cmd = cleaned_code_upper.startswith('G0') or cleaned_code_upper.startswith('G1')
         is_set_coord_cmd = cleaned_code_upper.startswith('G92')
 
-        def replace_coord(match):
-            axis = match.group(1).upper()
-            try:
-                val = float(match.group(2))
-                new_val = val
-
-                if (axis == 'X'):
-                    new_val = (val * x_scale) + x_offset
-                    if is_motion_cmd or is_set_coord_cmd: new_val += pen_x_offset
-                    return f'X{new_val:.6f}'
-                elif (axis == 'Y'):
-                    new_val = (val * y_scale) + y_offset
-                    if is_motion_cmd or is_set_coord_cmd: new_val += pen_y_offset
-                    return f'Y{new_val:.6f}'
-                elif (axis == 'Z'):
-                    if is_motion_cmd or is_set_coord_cmd:
-                        new_val = (val * z_scale) + z_offset
-                        return f'Z{new_val:.6f}'
-                    else: return match.group(0)
-                else: return match.group(0)
-            except ValueError: return match.group(0)
-
-        modified_code_part = coord_pattern.sub(replace_coord, code_part)
-        modified_gcode.append(modified_code_part + comment_part)
+        # For commands with coordinates, we need to extract all coordinates first,
+        # then apply transformations to all of them, then rebuild the line
+        if is_motion_cmd or is_set_coord_cmd:
+            # Extract all coordinates from this line
+            matches = list(coord_pattern.finditer(code_part))
+            if matches:
+                axes_values = {}  # Store original values by axis
+                for match in matches:
+                    axis = match.group(1).upper()
+                    try:
+                        val = float(match.group(2))
+                        axes_values[axis] = val
+                    except ValueError:
+                        pass
+                
+                # Apply transformations to X and Y coordinates if both are present
+                if 'X' in axes_values and 'Y' in axes_values:
+                    # Apply scaling
+                    scaled_x = axes_values['X'] * x_scale
+                    scaled_y = axes_values['Y'] * y_scale
+                    
+                    # Apply rotation
+                    if rotation_angle != 0:
+                        rotated_x = scaled_x * cos_theta - scaled_y * sin_theta
+                        rotated_y = scaled_x * sin_theta + scaled_y * cos_theta
+                        scaled_x = rotated_x
+                        scaled_y = rotated_y
+                    
+                    # Apply offsets
+                    final_x = scaled_x + x_offset - pen_x_offset  # Subtract pen offset
+                    final_y = scaled_y + y_offset - pen_y_offset  # Subtract pen offset
+                    
+                    # Update values
+                    axes_values['X'] = final_x
+                    axes_values['Y'] = final_y
+                
+                # Handle Z separately (no rotation)
+                if 'Z' in axes_values:
+                    axes_values['Z'] = (axes_values['Z'] * z_scale) + z_offset
+                
+                # Rebuild the line with transformed coordinates
+                modified_code_part = cleaned_code_upper.split()[0]  # Get command (G0, G1, G92)
+                for axis, value in sorted(axes_values.items()):  # Sort by axis for consistency
+                    modified_code_part += f" {axis}{value:.6f}"
+                
+                modified_line = modified_code_part + comment_part
+            else:
+                modified_line = code_part + comment_part
+        else:
+            # For non-motion commands, keep as is
+            modified_line = code_part + comment_part
+        
+        modified_gcode.append(modified_line)
 
     return modified_gcode
 
@@ -475,8 +532,30 @@ class GCodeVisualizer(tk.Tk):
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         left_frame.pack_propagate(False)
 
-        controls_frame = ttk.Frame(self) # Frame for transform controls
-        controls_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        # Create a canvas and scrollbar for the controls frame to make it scrollable
+        self.controls_canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        controls_scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.controls_canvas.yview)
+        self.controls_canvas.configure(yscrollcommand=controls_scrollbar.set)
+        
+        # Pack the canvas and scrollbar
+        self.controls_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, pady=5)
+        controls_scrollbar.pack(side=tk.LEFT, fill=tk.Y, padx=(0,5), pady=5)
+        
+        # Create the inner frame for controls that will be placed in the canvas
+        controls_frame = ttk.Frame(self.controls_canvas)
+        self.controls_frame = controls_frame
+        
+        # Create a window in the canvas to hold the controls frame
+        self.controls_canvas_window = self.controls_canvas.create_window(
+            (0, 0), window=controls_frame, anchor="nw", tags="controls_frame"
+        )
+        
+        # Configure canvas size and scrolling behavior
+        controls_frame.bind("<Configure>", self.on_controls_frame_configure)
+        self.controls_canvas.bind("<Configure>", self.on_controls_canvas_configure)
+        self.controls_canvas.bind_all("<MouseWheel>", self.on_mousewheel_controls)
+        self.controls_canvas.bind_all("<Button-4>", self.on_mousewheel_controls)
+        self.controls_canvas.bind_all("<Button-5>", self.on_mousewheel_controls)
 
         self.canvas_frame = ttk.Frame(self)
         self.canvas_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -594,36 +673,43 @@ class GCodeVisualizer(tk.Tk):
         transform_frame.grid(row=row_idx, column=0, pady=5, sticky="ew"); row_idx += 1
         transform_frame.columnconfigure(1, weight=1)
 
+        # NEW: Rotation entry
+        ttk.Label(transform_frame, text="Rotate:").grid(row=0, column=0, padx=2, pady=1, sticky="w")
+        self.rotation_angle_var = tk.DoubleVar(value=0.0)
+        self.rotation_entry = ttk.Entry(transform_frame, textvariable=self.rotation_angle_var, width=10, state=tk.DISABLED)
+        self.rotation_entry.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
+        ttk.Label(transform_frame, text="°").grid(row=0, column=2, padx=0, pady=1, sticky="w")
+
         # Scale entries
-        ttk.Label(transform_frame, text="Scale X:").grid(row=0, column=0, padx=2, pady=1, sticky="w")
+        ttk.Label(transform_frame, text="Scale X:").grid(row=1, column=0, padx=2, pady=1, sticky="w")
         self.scale_x_entry = ttk.Entry(transform_frame, textvariable=self.current_x_scale, width=10, state=tk.DISABLED)
-        self.scale_x_entry.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
+        self.scale_x_entry.grid(row=1, column=1, padx=2, pady=1, sticky="ew")
 
-        ttk.Label(transform_frame, text="Scale Y:").grid(row=1, column=0, padx=2, pady=1, sticky="w")
+        ttk.Label(transform_frame, text="Scale Y:").grid(row=2, column=0, padx=2, pady=1, sticky="w")
         self.scale_y_entry = ttk.Entry(transform_frame, textvariable=self.current_y_scale, width=10, state=tk.DISABLED)
-        self.scale_y_entry.grid(row=1, column=1, padx=2, pady=1, sticky="ew")
+        self.scale_y_entry.grid(row=2, column=1, padx=2, pady=1, sticky="ew")
 
-        ttk.Label(transform_frame, text="Scale Z:").grid(row=2, column=0, padx=2, pady=1, sticky="w")
+        ttk.Label(transform_frame, text="Scale Z:").grid(row=3, column=0, padx=2, pady=1, sticky="w")
         self.scale_z_entry = ttk.Entry(transform_frame, textvariable=self.current_z_scale, width=10, state=tk.DISABLED)
-        self.scale_z_entry.grid(row=2, column=1, padx=2, pady=1, sticky="ew")
+        self.scale_z_entry.grid(row=3, column=1, padx=2, pady=1, sticky="ew")
 
-        ttk.Label(transform_frame, text="Offset X:").grid(row=3, column=0, padx=2, pady=1, sticky="w")
+        ttk.Label(transform_frame, text="Offset X:").grid(row=4, column=0, padx=2, pady=1, sticky="w")
         self.offset_x_entry = ttk.Entry(transform_frame, textvariable=self.current_x_offset, width=10, state=tk.DISABLED)
-        self.offset_x_entry.grid(row=3, column=1, padx=2, pady=1, sticky="ew")
-        ttk.Label(transform_frame, text="Offset Y:").grid(row=4, column=0, padx=2, pady=1, sticky="w")
+        self.offset_x_entry.grid(row=4, column=1, padx=2, pady=1, sticky="ew")
+        ttk.Label(transform_frame, text="Offset Y:").grid(row=5, column=0, padx=2, pady=1, sticky="w")
         self.offset_y_entry = ttk.Entry(transform_frame, textvariable=self.current_y_offset, width=10, state=tk.DISABLED)
-        self.offset_y_entry.grid(row=4, column=1, padx=2, pady=1, sticky="ew")
-        ttk.Label(transform_frame, text="Offset Z:").grid(row=5, column=0, padx=2, pady=1, sticky="w")
+        self.offset_y_entry.grid(row=5, column=1, padx=2, pady=1, sticky="ew")
+        ttk.Label(transform_frame, text="Offset Z:").grid(row=6, column=0, padx=2, pady=1, sticky="w")
         self.offset_z_entry = ttk.Entry(transform_frame, textvariable=self.current_z_offset, width=10, state=tk.DISABLED)
-        self.offset_z_entry.grid(row=5, column=1, padx=2, pady=1, sticky="ew")
-        ttk.Label(transform_frame, text="Pen Offset X:").grid(row=6, column=0, padx=2, pady=1, sticky="w")
+        self.offset_z_entry.grid(row=6, column=1, padx=2, pady=1, sticky="ew")
+        ttk.Label(transform_frame, text="Pen Offset X:").grid(row=7, column=0, padx=2, pady=1, sticky="w")
         self.pen_offset_x_entry = ttk.Entry(transform_frame, textvariable=self.pen_offset_x_var, width=10, state=tk.DISABLED)
-        self.pen_offset_x_entry.grid(row=6, column=1, padx=2, pady=1, sticky="ew")
-        ttk.Label(transform_frame, text="Pen Offset Y:").grid(row=7, column=0, padx=2, pady=1, sticky="w")
+        self.pen_offset_x_entry.grid(row=7, column=1, padx=2, pady=1, sticky="ew")
+        ttk.Label(transform_frame, text="Pen Offset Y:").grid(row=8, column=0, padx=2, pady=1, sticky="w")
         self.pen_offset_y_entry = ttk.Entry(transform_frame, textvariable=self.pen_offset_y_var, width=10, state=tk.DISABLED)
-        self.pen_offset_y_entry.grid(row=7, column=1, padx=2, pady=1, sticky="ew")
+        self.pen_offset_y_entry.grid(row=8, column=1, padx=2, pady=1, sticky="ew")
         self.apply_transforms_button = ttk.Button(transform_frame, text="Apply to Selected", command=self.apply_transformations_to_selected, state=tk.DISABLED)
-        self.apply_transforms_button.grid(row=8, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        self.apply_transforms_button.grid(row=9, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
 
         # --- Actions on Selected File ---
         actions_frame = ttk.LabelFrame(controls_frame, text="Actions on Selected File", padding="5")
@@ -767,6 +853,7 @@ class GCodeVisualizer(tk.Tk):
         state = tk.NORMAL if is_selected else tk.DISABLED
 
         # Transformation entry fields
+        self.rotation_entry.config(state=state) # Enable/disable rotation entry
         self.scale_x_entry.config(state=state)
         self.scale_y_entry.config(state=state)
         self.scale_z_entry.config(state=state)
@@ -793,6 +880,7 @@ class GCodeVisualizer(tk.Tk):
 
     def clear_transform_entries(self):
         """Sets transform vars to default when no file is selected."""
+        self.rotation_angle_var.set(0.0) # Reset rotation angle
         self.current_x_scale.set(1.0)
         self.current_y_scale.set(1.0)
         self.current_z_scale.set(1.0)
@@ -862,6 +950,8 @@ class GCodeVisualizer(tk.Tk):
         try:
             # Read values from the DoubleVars (which are linked to entries)
             transform = file_data['transform'] # Get reference to the dict
+            # Add rotation to the transform dictionary
+            transform['rotation_angle'] = self.rotation_angle_var.get()
             transform['x_scale'] = self.current_x_scale.get()
             transform['y_scale'] = self.current_y_scale.get()
             transform['z_scale'] = self.current_z_scale.get()
@@ -2232,6 +2322,51 @@ class GCodeVisualizer(tk.Tk):
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save file:\n{e}")
             self.status_label.config(text="Save failed.")
+
+
+    def on_controls_frame_configure(self, event):
+        """Update the scrollable region when the inner frame size changes"""
+        # Update the canvas's scroll region to encompass the inner frame
+        self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+        
+    def on_controls_canvas_configure(self, event):
+        """Resize the inner frame when the canvas is resized"""
+        # Adjust the inner frame's width to match the canvas
+        self.controls_canvas.itemconfig(self.controls_canvas_window, width=event.width)
+        
+    def on_mousewheel_controls(self, event):
+        """Handle mouse wheel events for scrolling the controls frame"""
+        # Only process mousewheel if cursor is over the controls canvas
+        x, y = self.winfo_pointerxy()
+        widget_under_cursor = self.winfo_containing(x, y)
+        
+        # Check if widget_under_cursor is the controls_canvas or a child of it
+        in_controls = False
+        if widget_under_cursor:
+            parent = widget_under_cursor
+            while parent:
+                if parent == self.controls_canvas:
+                    in_controls = True
+                    break
+                try:
+                    parent = parent.master
+                except AttributeError:
+                    break
+        
+        if not in_controls:
+            return
+            
+        # Calculate scroll amount based on event type
+        scroll_amount = 0
+        if hasattr(event, 'delta'):  # Windows/macOS
+            scroll_amount = -1 * (event.delta // 120) * 30
+        elif hasattr(event, 'num'):  # Linux
+            if event.num == 4:  # Scroll up
+                scroll_amount = -30
+            elif event.num == 5:  # Scroll down
+                scroll_amount = 30
+                
+        self.controls_canvas.yview_scroll(scroll_amount, "units")
 
 
 # --- Main Execution ---

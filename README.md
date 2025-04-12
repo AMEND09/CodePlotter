@@ -1,6 +1,6 @@
 # CodePlotter
 
-A Python-based tool for visualizing, manipulating, and merging G-code files. This application is particularly useful for pen plotting with 3D printers like the Ender 3 V2. It provides a graphical interface for editing G-code files, applying transformations, and visualizing the toolpath on a virtual build plate.
+A Python-based tool for visualizing, manipulating, and merging G-code files. This application is particularly useful for pen plotting with CNC devices like 3D printers. It provides a graphical interface for editing G-code files, applying transformations, and visualizing the toolpath on a virtual build plate.
 
 ---
 
@@ -11,6 +11,9 @@ A Python-based tool for visualizing, manipulating, and merging G-code files. Thi
 - **Transformation tools**:
   - Scale, offset, and rotate G-code paths.
   - Apply pen offsets for pen plotter mounts.
+- **Bed image warping**:
+  - Load an image of your printer bed and warp it to match real-world coordinates.
+  - Align your designs precisely with physical reference points.
 - **Paper overlay**:
   - Add overlays for A4, US Letter, or College Ruled paper.
   - Adjust paper position with offsets.
@@ -18,6 +21,7 @@ A Python-based tool for visualizing, manipulating, and merging G-code files. Thi
 - **Interactive manipulation**:
   - Drag and drop files directly on the canvas.
   - Center designs or apply margins with a single click.
+  - Smooth zooming that maintains alignment between grid and design.
 - **Export**: Save merged and transformed G-code files ready for printing.
 
 ---
@@ -30,6 +34,7 @@ This tool is ideal for:
 3. Visualizing G-code before sending it to your printer.
 4. Adjusting for hardware offsets, such as pen mounts.
 5. Merging multiple files for continuous printing.
+6. Aligning designs precisely using reference images of your bed.
 
 ---
 
@@ -38,6 +43,7 @@ This tool is ideal for:
 ### Prerequisites
 - Python 3.6 or higher.
 - Tkinter (usually bundled with Python).
+- OpenCV, NumPy, and Pillow (optional, for image warping features).
 
 ### Setup
 1. Clone this repository or download the source files.
@@ -69,14 +75,19 @@ python legacy.py
    
 2. **Visualize and transform**:
    - Select a file from the list to modify its properties.
-   - Adjust scale, offsets, and pen offsets as needed.
+   - Adjust scale, offsets, rotation, and pen offsets as needed.
    - Drag files directly on the canvas for positioning.
    
 3. **Add paper overlay**:
    - Select paper type and position for planning.
    - Offset the paper as needed to match your printer setup.
    
-4. **Save merged results**:
+4. **Use bed image alignment (optional)**:
+   - Load an image of your printer bed.
+   - Select the four corners of your bed in the image.
+   - See your design aligned to the physical bed features.
+   
+5. **Save merged results**:
    - Click "Save Visible Merged" to export a combined G-code file with all transformations applied.
 
 ---
@@ -101,8 +112,15 @@ For using an Ender 3 V2 as a pen plotter:
   - College Ruled (203.2mm x 266.7mm)
 - Add an overlay to the virtual build plate to plan your design placement.
 
+### Bed Image Warping
+- Load an image of your printer bed.
+- Select four corners to map physical bed space to image.
+- Visualize designs overlaid on your actual bed for precise placement.
+- Useful for aligning with physical features or markings on your bed.
+
 ### Transformations
 - **Scale**: Adjust the size of the G-code paths.
+- **Rotation**: Rotate designs to any angle.
 - **Offset**: Move the paths to a specific position on the build plate.
 - **Pen Offset**: Compensate for the position of the pen mount on your printer.
 
@@ -114,6 +132,7 @@ For using an Ender 3 V2 as a pen plotter:
 - View the toolpath for each file in different colors.
 - Toggle visibility for individual files.
 - See the combined bounds of all visible files.
+- Smooth zooming that keeps grid and design aligned.
 
 ---
 
@@ -152,6 +171,9 @@ To create a standalone executable file that doesn't require Python installation:
 - **Visibility Toggle**: Hide/show individual files to focus on specific parts.
 - **Custom Colors**: Change the color of each file for better visualization.
 - **Z-movement Filtering**: Hide Z-only movements for cleaner visualization.
+- **Rotation**: Rotate designs by specifying an angle in degrees.
+- **Out-of-bounds Warning**: Disabling the pen offset warning lets you save files even if they go beyond bed boundaries.
+- **Scrollable Controls**: The center control panel now scrolls for better usability on smaller screens.
 
 ---
 
